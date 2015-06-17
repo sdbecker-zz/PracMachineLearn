@@ -1,0 +1,133 @@
+---
+title: "Activity Recognition of Weight Exercise"
+author: "Steven Becker"
+date: "June 12, 2015"
+output: html_document
+---
+```{r Setup, echo = FALSE, message=FALSE}
+#load in the required libraries
+library(knitr)
+library(dplyr)
+library(caret)
+library(xtable)
+
+#set global options for article
+opts_chunk$set(echo = FALSE)
+
+```
+```{r LoadData, cache = TRUE}
+#load in the required data from the files in the directory
+trainData <- read.csv('pml-training.csv', stringsAsFactors = FALSE)
+testData <- read.csv('pml-testing.csv', stringsAsFactors = FALSE)
+```
+
+## Introduction
+
+This article focuses on recognising when a particular weight exercise is performed correctly. In particular when a single arm curl is performed correctly. This article
+is done for the completion of a project in Practical Machine Learning. Therefore the idea and data for this project comes from the [Human Activity Recognition](http://groupware.les.inf.puc-rio.br/har) website. Data was gathered from sensors connected to the dumbell,forearm, bicep area and waist of each test candidate. The candidates were then asked, under the guidance of a professional, to perform the single arm curl using five specific methods. The first method was considered correct and the other four were considered as common problematic methods associated with this type of exercise. So the goal of this article is to build and train a model on this data to identify when the exercise is been done correctly, or rather to be able to classify the exercise done into the five predefined methods.
+
+## Data Cleaning
+The training and required test data set have been provided by the Practical Machine Learning organisors. The number of features in each set is 160, including the outcome variable called **classe**. The **classe** variable denotes which of the five methods are used at the time of recording a specific candidate. The number of features need to be reduced in order to make this problem more tractable. To do this it is noticed that the features in the test data that have usable values are far less than the 160 available. Considering the test data set will be used to predict the type of excersice method, the training data set will be reduced to the same number of features. In short, the summary statistics included in the data sets are not included in the test data set for prediction. Removing those features reduces the number of overall features from 160 to 60. Of the remaining 60 the first 7 are candidate and time based referenced variables, which will not be needed. Therefore there are 53 features to consider including the **classe** variable, which is to be separated out as the outcome variable to predict. The training data will be split up into a  sub-training and validation set. Given there is a final test data set to use, the training data set will split 60/40 into a sub-training and validation set for the purposes of cross validation.
+
+```{r DataCleanandSetup}
+#identify the NA columns from the testing data and delete from training data
+dataNA <- as.vector(is.na(testData[1,]))
+trData <- trainData[!dataNA]
+#remove the first 7 columns
+trData <- trData[-(1:7)]
+trData$classe <- as.factor(trData$classe)
+#split the training data into a training and test set
+inTrain <- createDataPartition(y = trData$classe, p = 0.6, list = FALSE)
+training <- trData[inTrain,]
+testing <- trData[-inTrain,]
+
+```
+
+## Exploratory Analysis
+
+The remaining 53 variables are made up of the outcome variable **classe** and 52 variables representing 13 dimensions of each of the four sensors. The 13 variables are made up of the following metrics:
+
+* Roll
+* Pitch
+* Yaw
+* Total Acceleration
+* Gyroscopic in three dimensions (x,y,z)
+* Acceleration in three dimensions (x,y,z)
+* Magnetometric in three dimensions (x,y,z)
+
+Skimming over the data it appears that some features may have more or less constant values. Implying the variance may be zero or near zero, if so they could be excuded from the data set. The following gives the result of the first ten variables.
+
+```{r NearZeroCovariates}
+#Find any zero or near zero variance covariates
+nearZ <- nearZeroVar(training[-53], saveMetrics = TRUE) # exclude outcome col = 53
+head(nearZ,10)
+
+```
+
+From the first 10 variables it appears none may be excluded and if a count is performed on the all the  __zeroVar__ and __nzv__ variables we get `r sum(nearZ$zeroVar)` and `r sum(nearZ$nzv)` respectively. Confriming no variables should be removed.
+
+It is important to note that the gyroscope and magnetometor measures orientation and change in orientation, which in all likelihood may be captured in the first three variables, _Roll_, _Pitch_ and _Yaw_. Further, the acceleration direction may be less important than the acceleration itself, if the first three variables capture the orientation then adding the total accelration would likely corroborate the type of method used. So the fourth variable _Total Acceleration_ would be sufficient. Therefore it is postulated that only the first four variables per sensor will be required to succesfully capture the characteristics of each of the methods.
+
+## Machine Learning
+
+The training data is filtered for the following variables for each of the sensors:
+
+* Roll
+* Pitch
+* Yaw
+* Total Acceleration
+
+The resulting data is then used to train the model to predict the class of exercise type given the data in the validation set.
+
+The algorithm to be used is **boosting with trees** using the _gbm_ method within the _train_ function from the __caret__ package and will be applied to the sub-training set.
+This alogrithm is selected as it combines the classfication tree algorithm with boosting which weights the strengths of each variable to improve the prediction of the outcome. The confusion matrix table and accuracy will be calculated first for the sub-training set and then for the validation set. It is always expected that the out of sample error should be slighlty higher than in sample, therefore the accuracy for the validation set should be lower.
+
+```{r TrainModel, cache = TRUE, message = FALSE}
+
+#create the filtered training model
+trainingd <- select(training, contains('roll'))
+trainingd <- cbind(trainingd,select(training, contains('pitch')))
+trainingd <- cbind(trainingd,select(training, contains('yaw')))
+trainingd <- cbind(trainingd,select(training, contains('total')))
+trainingd <- cbind(trainingd,classe = training$classe)
+
+#create the filtered validation model
+testingd <- select(testing, contains('roll'))
+testingd <- cbind(testingd,select(testing, contains('pitch')))
+testingd <- cbind(testingd,select(testing, contains('yaw')))
+testingd <- cbind(testingd,select(testing, contains('total')))
+testingd <- cbind(testingd,classe = testing$classe)
+
+#run the training model using boosting for trees
+modelFit1 <- train(classe ~., method = 'gbm', data = trainingd, verbose = FALSE)
+
+```
+
+## Results
+
+The following is the confusion matrix for the model predicting the **training data set**. 
+```{r TrainingResults , message = FALSE}
+
+predTr <- predict(modelFit1, trainingd)
+ttconf <- confusionMatrix(predTr, trainingd$classe)
+kable(ttconf$table, format = 'markdown')
+
+```
+
+The following is the confusion matrix for the model predicting the **validation data set**.
+```{r TestResults, message = FALSE}
+
+pred <- predict(modelFit1, testingd)
+tconf <- confusionMatrix(pred, testingd$classe)
+kable(tconf$table, format = 'markdown')
+
+```
+
+The accuracy for the model on the training and validation data set:
+
+Data Set Used   | Accuracy
+----------------|------------
+Training Set    | `r ttconf$overall[1]`
+Validation Set  | `r tconf$overall[1]`
+
+As expected the out of sample error is higher, thus the accuracy is lower on the validation set. The overall accuracy was good enough and was used to submit the test data prediction succesfully.
