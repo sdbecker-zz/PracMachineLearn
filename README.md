@@ -1,2 +1,4 @@
 # PracMachineLearn
-The files 
+The files:
+
+*Activityrecognition.
